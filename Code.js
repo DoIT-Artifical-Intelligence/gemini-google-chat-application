@@ -292,8 +292,10 @@ function onMessage(event) {
 
       // Decide whether to process based on DM or mention
       if (spaceType === "DM" || isMentioned) {
-        // Extract text after mention only if in a ROOM and mentioned
-        if (spaceType !== "DM" && isMentioned) {
+        // --- FIX STARTS HERE ---
+        // Extract text after mention if the bot was mentioned, regardless of space type.
+        // This handles cases where a user might @mention the bot even in a DM.
+        if (isMentioned) {
           const mentionText = extractTextAfterMention(
             event.message.text,
             event.message.annotations,
@@ -304,8 +306,9 @@ function onMessage(event) {
             `Mention text extracted: "${userPrompt}" (Original: "${event.message.text}")`
           );
         }
+        // --- FIX ENDS HERE ---
 
-        // Check for "Use pro." text trigger (case-insensitive)
+        // Check for "Use pro." text trigger (case-insensitive) on the cleaned prompt
         if (userPrompt.toLowerCase().startsWith("use pro.")) {
           modelToUse = GEMINI_PRO_MODEL;
           userPrompt = userPrompt.substring("use pro.".length).trim();
