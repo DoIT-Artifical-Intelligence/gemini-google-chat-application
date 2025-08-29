@@ -17,7 +17,7 @@ const SYSTEM_INSTRUCTIONS = {
 const CHAT_COMMAND_ID = 3; // /chat
 const CLEAR_HISTORY_COMMAND_ID = 2; // /clearhistory
 const NEW_CHAT_COMMAND_ID = 4; // /newchat
-const PRO_COMMAND_ID = 5; // /pro (NEW)
+const PRO_COMMAND_ID = 5; // /pro
 
 // --- API Key Masking Function ---
 /**
