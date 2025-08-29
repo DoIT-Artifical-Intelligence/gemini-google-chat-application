@@ -1,8 +1,8 @@
 // --- Configuration ---
 const GEMINI_API_KEY =
   PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-const GEMINI_MODEL = "gemini-2.5-flash";
-const GEMINI_API_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_MODEL = "gemini-2.5-flash"; // Default model
+const GEMINI_PRO_MODEL = "gemini-2.5-pro"; // Pro model
 const MAX_HISTORY_LENGTH = 20; // Max messages PER CONVERSATION (per DM or per Space property)
 const SYSTEM_INSTRUCTIONS = {
   parts: [
@@ -17,6 +17,7 @@ const SYSTEM_INSTRUCTIONS = {
 const CHAT_COMMAND_ID = 3; // /chat
 const CLEAR_HISTORY_COMMAND_ID = 2; // /clearhistory
 const NEW_CHAT_COMMAND_ID = 4; // /newchat
+const PRO_COMMAND_ID = 5; // /pro
 
 // --- API Key Masking Function ---
 /**
@@ -148,6 +149,7 @@ function onMessage(event) {
   const botUserId =
     PropertiesService.getScriptProperties().getProperty("BOT_USER_ID");
   let spaceType = null;
+  let modelToUse = GEMINI_MODEL; // Default to the standard flash model
 
   // --- Determine Conversation Key and Check Event Type ---
   if (event.type === "MESSAGE" && event.message) {
@@ -163,7 +165,7 @@ function onMessage(event) {
       return; // Ignore unsupported space types
     }
 
-    // --- Handle Slash Commands (/chat, /clearhistory, /newchat) ---
+    // --- Handle Slash Commands (/chat, /clearhistory, /newchat, /pro) ---
     if (event.message.slashCommand) {
       isSlashCommand = true;
       const commandId = String(event.message.slashCommand.commandId);
@@ -182,6 +184,20 @@ function onMessage(event) {
               event.user // Potentially private response
             );
           }
+          break; // Proceed to handleConversationTurn preparation
+
+        case String(PRO_COMMAND_ID):
+          modelToUse = GEMINI_PRO_MODEL;
+          userPrompt = event.message.argumentText
+            ? event.message.argumentText.trim()
+            : "";
+          if (!userPrompt) {
+            return createCardResponse(
+              "Please provide your message after the `/pro` command.",
+              event.user
+            );
+          }
+          console.log("Using PRO model for this request via slash command.");
           break; // Proceed to handleConversationTurn preparation
 
         case String(CLEAR_HISTORY_COMMAND_ID):
@@ -244,7 +260,7 @@ function onMessage(event) {
 
         default:
           return createCardResponse(
-            `Sorry, I don't recognize the command ID ${commandId}. Use /chat, /clearhistory, or /newchat.`,
+            `Sorry, I don't recognize the command ID ${commandId}. Use /chat, /pro, /clearhistory, or /newchat.`,
             event.user // Potentially private response
           );
       } // End switch
@@ -276,8 +292,10 @@ function onMessage(event) {
 
       // Decide whether to process based on DM or mention
       if (spaceType === "DM" || isMentioned) {
-        // Extract text after mention only if in a ROOM and mentioned
-        if (spaceType !== "DM" && isMentioned) {
+        // --- FIX STARTS HERE ---
+        // Extract text after mention if the bot was mentioned, regardless of space type.
+        // This handles cases where a user might @mention the bot even in a DM.
+        if (isMentioned) {
           const mentionText = extractTextAfterMention(
             event.message.text,
             event.message.annotations,
@@ -287,6 +305,14 @@ function onMessage(event) {
           console.log(
             `Mention text extracted: "${userPrompt}" (Original: "${event.message.text}")`
           );
+        }
+        // --- FIX ENDS HERE ---
+
+        // Check for "Use pro." text trigger (case-insensitive) on the cleaned prompt
+        if (userPrompt.toLowerCase().startsWith("use pro.")) {
+          modelToUse = GEMINI_PRO_MODEL;
+          userPrompt = userPrompt.substring("use pro.".length).trim();
+          console.log(`Using PRO model for this request via text trigger.`);
         }
 
         // Check for plain text 'clearhistory' command
@@ -350,8 +376,8 @@ function onMessage(event) {
       `Final User prompt for API (${sourceType}): "${finalUserPrompt}"`
     );
 
-    // Pass the potentially modified prompt to the handler
-    return handleConversationTurn(conversationKey, finalUserPrompt); // Use finalUserPrompt here
+    // Pass the potentially modified prompt and selected model to the handler
+    return handleConversationTurn(conversationKey, finalUserPrompt, modelToUse);
   } else if (!isSlashCommand && userPrompt === "") {
     console.log(
       "Conditions not met to handle conversation turn (e.g., prompt was effectively empty after processing)."
@@ -368,16 +394,19 @@ function onMessage(event) {
 }
 
 /**
- * Handles a single conversation turn: loads history for the specific conversation key,
- * adds the new user prompt, prunes history, calls Gemini API, processes response,
- * updates history, saves it back to its Script Property, and returns the response.
+ * Handles a single conversation turn: loads history, adds new prompt, prunes history,
+ * calls the selected Gemini API model, processes response, updates history, saves it,
+ * and returns the response.
  *
  * @param {string} conversationKey The unique identifier for the conversation (space name).
  * @param {string} userPrompt The user's message text for this turn.
+ * @param {string} [model=GEMINI_MODEL] The Gemini model to use for this turn. Defaults to the standard model.
  * @return {object} A Google Chat response object (Card V2) containing the AI's response or an error message.
  */
-function handleConversationTurn(conversationKey, userPrompt) {
-  console.log(`HANDLE_TURN: Processing turn for key: ${conversationKey}`);
+function handleConversationTurn(conversationKey, userPrompt, model = GEMINI_MODEL) {
+  console.log(
+    `HANDLE_TURN: Processing turn for key: ${conversationKey} with model: ${model}`
+  );
 
   if (!conversationKey || !userPrompt) {
     console.error(
@@ -404,8 +433,8 @@ function handleConversationTurn(conversationKey, userPrompt) {
     `HANDLE_TURN: History length after pruning: ${conversationHistory.length}`
   );
 
-  // Call Gemini API
-  const modelResponse = callGeminiApiWithHistory(conversationHistory); // Pass the potentially pruned history
+  // Call Gemini API with the selected model
+  const modelResponse = callGeminiApiWithHistory(conversationHistory, model); // Pass the potentially pruned history and model
 
   // Add model response to history (if not an error)
   const isErrorResponse =
@@ -493,25 +522,27 @@ function createCardResponse(messageText, viewer = null) {
 }
 
 /**
- * Calls the Gemini API with the provided conversation history.
+ * Calls the Gemini API with the provided conversation history and model.
  * Handles request preparation, API call, and response/error processing.
  *
  * @param {Array<{role: string, parts: Array<{text: string}>}>} history The conversation history array.
+ * @param {string} model The Gemini model to use (e.g., 'gemini-2.5-flash').
  * @return {string} The text response from Gemini, or an error message string.
  */
-function callGeminiApiWithHistory(history) {
+function callGeminiApiWithHistory(history, model) {
   if (!GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY script property not set.");
     return "ERROR: GEMINI_API_KEY script property not set.";
   }
   if (!history || history.length === 0) {
     console.error("Attempted to call Gemini with empty history.");
-    // If history is empty (e.g., after /newchat or error), Gemini might need *something*
-    // Let's reconsider if we should *always* send a prompt, even if history is empty.
     // The handleConversationTurn adds the user prompt *before* calling this, so history shouldn't be empty here.
     // If it *is* empty, it indicates an upstream logic error.
     return "Sorry, something went wrong (internal history error).";
   }
+
+  const geminiApiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+  console.log(`Calling Gemini API endpoint for model: ${model}`);
 
   const { filteredHistory, needsLeadingUserRole } =
     filterAndPrepareHistory(history);
@@ -588,7 +619,7 @@ function callGeminiApiWithHistory(history) {
   );
 
   try {
-    const response = UrlFetchApp.fetch(GEMINI_API_ENDPOINT, options);
+    const response = UrlFetchApp.fetch(geminiApiEndpoint, options);
     const responseCode = response.getResponseCode();
     const responseBody = response.getContentText();
 
@@ -1043,9 +1074,9 @@ function onAddToSpace(event) {
     "Gemini Bot";
 
   if (event?.space?.type === "DM") {
-    message = `Thank you for adding me to a DM, ${userName}! I will remember our conversation history automatically.\nUse \`/clearhistory\` or type \`clearhistory\` to reset it, or \`/newchat [your message]\` to start a completely fresh conversation.\nYou can simply type your messages directly to chat with me. \nIf you see Gemini from DoIT AI not responding then your query can be too complex to finish in under 30 seconds.`;
+    message = `Thank you for adding me to a DM, ${userName}! I will remember our conversation history automatically.\nUse \`/clearhistory\` or type \`clearhistory\` to reset it, or \`/newchat [your message]\` to start a completely fresh conversation.\nYou can simply type your messages directly to chat with me. For more complex queries, start your message with \`Use pro.\` or use the \`/pro\` command.\nIf you see Gemini from DoIT AI not responding then your query can be too complex to finish in under 30 seconds.`;
   } else {
-    message = `Thank you for adding me to ${spaceName}, ${userName}!\nIn group chats, please @mention me (\`@${botDisplayName}\`) or use slash commands:\n • \`@${botDisplayName} [your message]\` will respond\n • \`@${botDisplayName} clearhistory\` clears history\n • \`/chat [your message]\`\n • \`/newchat [your message]\`\n • \`/clearhistory\``;
+    message = `Thank you for adding me to ${spaceName}, ${userName}!\nIn group chats, please @mention me (\`@${botDisplayName}\`) or use slash commands:\n • \`@${botDisplayName} [your message]\` will respond\n • \`@${botDisplayName} clearhistory\` clears history\n • \`/chat [your message]\`\n • \`/pro [your message]\` (for complex queries)\n • \`/newchat [your message]\`\n • \`/clearhistory\``;
   }
   console.log(
     "onAddToSpace triggered. Space Type:",
