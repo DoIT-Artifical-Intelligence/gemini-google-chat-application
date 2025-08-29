@@ -17,7 +17,7 @@ const SYSTEM_INSTRUCTIONS = {
 const CHAT_COMMAND_ID = 3; // /chat
 const CLEAR_HISTORY_COMMAND_ID = 2; // /clearhistory
 const NEW_CHAT_COMMAND_ID = 4; // /newchat
-const PRO_COMMAND_ID = 5; // /pro
+const PRO_COMMAND_ID = 5; // /pro (NEW)
 
 // --- API Key Masking Function ---
 /**
@@ -542,7 +542,7 @@ function callGeminiApiWithHistory(history, model) {
   }
 
   const geminiApiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-  console.log(`Calling Gemini API endpoint: ${maskApiKey(geminiApiEndpoint)}`);
+  console.log(`Calling Gemini API endpoint for model: ${model}`);
 
   const { filteredHistory, needsLeadingUserRole } =
     filterAndPrepareHistory(history);
