@@ -1,16 +1,9 @@
 // --- Configuration ---
 const GEMINI_API_KEY =
   PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-const GEMINI_MODEL = "gemini-2.5-flash"; // Default model
+const GEMINI_MODEL = "gemini-flash-latest"; // Default model
 const GEMINI_PRO_MODEL = "gemini-2.5-pro"; // Pro model
 const MAX_HISTORY_LENGTH = 20; // Max messages PER CONVERSATION (per DM or per Space property)
-const SYSTEM_INSTRUCTIONS = {
-  parts: [
-    {
-      text: "Instructions for formatting your response: Respond with normal text. For emphasis or structure ONLY use the following HTML tags: <b>bold</b>, <i>italic</i>, <code>inline code</code>, <pre>code block</pre>. Do NOT create a full HTML document. Absolutely do NOT include <!DOCTYPE>, <html>, <head>, or <body> tags. Just provide the formatted text answer to the prompt.",
-    },
-  ],
-};
 
 // --- Command IDs ---
 // Ensure these IDs match the commands configured in your Google Cloud Console for the Chat App API
@@ -471,7 +464,7 @@ function handleConversationTurn(conversationKey, userPrompt, model = GEMINI_MODE
 
 /**
  * Helper function to create a simple Card V2 response object.
- * @param {string} messageText The text to display (can contain HTML as per SYSTEM_INSTRUCTIONS).
+ * @param {string} messageText The text to display, which will be rendered as Markdown.
  * @param {object} [viewer] Optional. If provided, makes the message private to this user ({ name: "users/...", ... }). If null, message is public.
  * @return {object} The Google Chat response object.
  */
@@ -490,13 +483,11 @@ function createCardResponse(messageText, viewer = null) {
               widgets: [
                 {
                   textParagraph: {
-                    // Use formattedText if message contains HTML tags Gemini might use
-                    // Use textParagraph for simpler text or markdown-like formatting if preferred
                     text:
                       messageText && String(messageText).trim()
                         ? String(messageText)
                         : "(No response text generated)",
-                    // formattedText: messageText && String(messageText).trim() ? String(messageText) : "(No response text generated)" // Alternative if using HTML
+                    textSyntax: "MARKDOWN", // Render the text as Markdown.
                   },
                 },
               ],
@@ -566,7 +557,7 @@ function callGeminiApiWithHistory(history, model) {
   }
   // https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerationConfig
   const payload = {
-    systemInstruction: SYSTEM_INSTRUCTIONS,
+    // systemInstruction has been removed.
     contents: filteredHistory,
     generationConfig: {
       temperature: 1,
