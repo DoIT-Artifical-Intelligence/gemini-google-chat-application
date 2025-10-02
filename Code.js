@@ -1,11 +1,4 @@
 // --- Configuration ---
-const SYSTEM_INSTRUCTIONS = {
-    parts: [
-        {
-            text: "You are a helpful chat assistant in Google chat. You will be used in DM's as well as ROOM's. The prompts provided to you have prefix like 'message from [USER]'. This is helpful for keeping track of who said what in multi-user conversations. If the prompt is 'message from John Doe. Say hi to Jill' then you should treat this as 'Say hi to Jill' and do not associate that John is saying hi to Jill. That prompt prefix is useful in multi-turn conversations such as 'message from Jill Bloggs. What did John say?' you could respond with 'Say hi to Jill'",
-        },
-    ],
-};
 const GEMINI_API_KEY =
     PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
 const GEMINI_MODEL = "gemini-flash-latest"; // Default model
@@ -383,7 +376,8 @@ function onMessage(event) {
         const displayName = event.user?.displayName;
 
         if (displayName) {
-            finalUserPrompt = `Message from ${displayName}. ${userPrompt}`;
+            // ** UPDATED LINE **
+            finalUserPrompt = `Message from ${displayName}. Please ignore this unless prompting about past conversations. ${userPrompt}`;
             console.log(
                 `Adding user display name prefix. Original prompt: "${userPrompt}", Final prompt: "${finalUserPrompt}"`
             );
@@ -551,7 +545,7 @@ function createCardResponse(messageText, viewer = null) {
  * Handles request preparation, API call, and response/error processing.
  *
  * @param {Array<{role: string, parts: Array<{text: string}>}>} history The conversation history array.
- * @param {string} model The Gemini model to use (e.g., 'gemini-2.5-flash').
+ * @param {string} model The Gemini model to use (e.g., 'gemini-1.5-flash').
  * @return {string} The text response from Gemini, or an error message string.
  */
 function callGeminiApiWithHistory(history, model) {
@@ -561,8 +555,6 @@ function callGeminiApiWithHistory(history, model) {
     }
     if (!history || history.length === 0) {
         console.error("Attempted to call Gemini with empty history.");
-        // The handleConversationTurn adds the user prompt *before* calling this, so history shouldn't be empty here.
-        // If it *is* empty, it indicates an upstream logic error.
         return "Sorry, something went wrong (internal history error).";
     }
 
@@ -572,34 +564,30 @@ function callGeminiApiWithHistory(history, model) {
     const { filteredHistory, needsLeadingUserRole } =
         filterAndPrepareHistory(history);
 
-    // If filtering still results in empty history (unlikely with current logic but possible if initial history was bad)
     if (filteredHistory.length === 0 && !needsLeadingUserRole) {
         console.error("History is empty after filtering adjacent roles.");
         return "Sorry, something went wrong processing conversation history.";
     }
 
-    // Prepend placeholder if necessary (Gemini requires history to start with 'user')
     if (needsLeadingUserRole) {
         console.warn(
             "History requires leading 'user' role. Prepending a placeholder."
         );
-        // Use a more neutral placeholder if preferred
         filteredHistory.unshift({
             role: "user",
-            parts: [{ text: "(Context starts)" }], // Or just the first user message if available and appropriate
+            parts: [{ text: "(Context starts)" }],
         });
     }
-    // https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/GenerationConfig
+
+    // ** UPDATED SECTION: System instructions and conditional logic removed. **
     const payload = {
-        systemInstruction: SYSTEM_INSTRUCTIONS,
         contents: filteredHistory,
         generationConfig: {
             temperature: 1,
             topP: 0.95,
             topK: 64,
             maxOutputTokens: 65536,
-            thinkingConfig: { thinkingBudget: 4000 },
-            responseMimeType: "text/plain",
+            thinkingConfig: { thinkingBudget: -1 },
             candidateCount: 1,
         },
         safetySettings: [
@@ -634,8 +622,9 @@ function callGeminiApiWithHistory(history, model) {
         method: "post",
         contentType: "application/json",
         payload: JSON.stringify(payload),
-        muteHttpExceptions: true, // Handle errors gracefully
+        muteHttpExceptions: true,
     };
+
     console.log(
         "Gemini API Payload Preview (first/last part):",
         JSON.stringify(payload.contents[0]),
@@ -649,9 +638,9 @@ function callGeminiApiWithHistory(history, model) {
         const responseBody = response.getContentText();
 
         if (responseCode === 200) {
+            // ... (The rest of your response handling logic remains exactly the same)
             const data = JSON.parse(responseBody);
 
-            // Check for prompt feedback (blocking before generation)
             if (data.promptFeedback && data.promptFeedback.blockReason) {
                 console.error(
                     "Gemini API blocked the prompt. Reason:",
@@ -662,12 +651,11 @@ function callGeminiApiWithHistory(history, model) {
                 return `Sorry, your request was blocked by safety filters (Reason: ${data.promptFeedback.blockReason}).`;
             }
 
-            // Check if candidates exist
             if (!data.candidates || data.candidates.length === 0) {
                 console.error(
                     "Gemini API response missing 'candidates' array or empty.",
                     "Full Response Snippet:",
-                    responseBody.substring(0, 500) // Log snippet
+                    responseBody.substring(0, 500)
                 );
                 if (data.promptFeedback && data.promptFeedback.blockReason) {
                     return `Sorry, your request was blocked (Reason: ${data.promptFeedback.blockReason}).`;
@@ -677,12 +665,11 @@ function callGeminiApiWithHistory(history, model) {
 
             const candidate = data.candidates[0];
 
-            // Check finish reason (blocking or issues during generation)
             if (
                 candidate &&
                 candidate.finishReason &&
                 candidate.finishReason !== "STOP" &&
-                candidate.finishReason !== "MAX_TOKENS" // MAX_TOKENS is usually okay, just means response was cut short
+                candidate.finishReason !== "MAX_TOKENS"
             ) {
                 console.error(
                     `Gemini API finished with non-standard reason: ${candidate.finishReason}. Ratings:`,
@@ -693,7 +680,6 @@ function callGeminiApiWithHistory(history, model) {
                     reasonMessage = "due to safety filters.";
                 else if (candidate.finishReason === "RECITATION")
                     reasonMessage = "due to potential recitation issues.";
-                // Handle other reasons
                 return `Sorry, the response generation was stopped ${reasonMessage}`;
             }
 
@@ -701,21 +687,19 @@ function callGeminiApiWithHistory(history, model) {
             const parts = candidate?.content?.parts;
 
             if (Array.isArray(parts)) {
-                // Find the first part that does NOT have 'thought: true'
-                const responsePart = parts.find((part) => !part.thought); // Finds the first part where 'thought' is falsy (false or missing)
+                const responsePart = parts.find((part) => !part.thought);
 
                 if (responsePart && responsePart.text) {
                     responseText = responsePart.text.trim();
                     console.log("Extracted response text from non-thought part.");
                 } else {
-                    // Handle cases where no suitable response part is found
                     const hasOnlyThoughts =
                         parts.length > 0 && parts.every((part) => part.thought);
                     if (hasOnlyThoughts) {
                         console.warn(
                             "Gemini response contained ONLY 'thought' parts. No user-facing text found."
                         );
-                        responseText = null; // Explicitly set to null or could return an error message
+                        responseText = null;
                     } else if (parts.length > 0 && !parts.some((part) => part.text)) {
                         console.warn(
                             "Gemini response parts found, but none contained text."
@@ -727,21 +711,15 @@ function callGeminiApiWithHistory(history, model) {
                         );
                         responseText = null;
                     }
-                    // If responsePart was found but had no .text, responseText remains null
                 }
             } else {
                 console.warn("Candidate content.parts is missing or not an array.");
-                // responseText remains null
             }
 
-            // Check if we successfully extracted text
             if (responseText !== null) {
-                return responseText; // Return the extracted and trimmed text
+                return responseText;
             } else {
-                // --- Fallback Error Handling (if no valid text part was found) ---
-                // Check if it was a function call that didn't produce text
                 if (candidate?.content?.parts?.[0]?.functionCall) {
-                    // Check first part just in case
                     console.warn(
                         "Gemini response was a function call, but no text part generated:",
                         JSON.stringify(candidate.content.parts[0].functionCall)
@@ -757,10 +735,8 @@ function callGeminiApiWithHistory(history, model) {
                 );
                 return `Sorry, the AI returned empty or invalid response content (Finish Reason: ${candidate?.finishReason || "Unknown"
                     }). No suitable text part found.`;
-                // --- End Fallback Error Handling ---
             }
         } else {
-            // Handle non-200 HTTP responses
             console.error(
                 `Gemini API Error Response (${responseCode}): ${responseBody}`
             );
@@ -776,7 +752,6 @@ function callGeminiApiWithHistory(history, model) {
             return errorMessage;
         }
     } catch (e) {
-        // Handle exceptions during fetch or processing
         console.error(
             `Error during UrlFetchApp or response processing: ${e}`,
             e.stack
