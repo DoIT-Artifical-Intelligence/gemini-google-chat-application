@@ -615,6 +615,12 @@ function callGeminiApiWithHistory(history, model) {
             {
                 googleSearch: {},
             },
+            {
+                codeExecution: {},
+            },
+            {
+                googleMaps: {},
+            }
         ],
     };
 
