@@ -620,7 +620,7 @@ function callGeminiApiWithHistory(history, model) {
             },
             {
                 googleMaps: {},
-            }
+            },
         ],
     };
 
