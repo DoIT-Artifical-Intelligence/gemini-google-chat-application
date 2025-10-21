@@ -615,9 +615,10 @@ function callGeminiApiWithHistory(history, model) {
             {
                 googleSearch: {},
             },
-            {
-                codeExecution: {},
-            },
+            // Google Maps tool is not supported with CodeExecution
+            // {
+            //     codeExecution: {},
+            // },
             {
                 googleMaps: {},
             },
