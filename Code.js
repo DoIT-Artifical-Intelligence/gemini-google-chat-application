@@ -1,7 +1,7 @@
 // --- Configuration ---
 const GEMINI_API_KEY =
     PropertiesService.getScriptProperties().getProperty("GEMINI_API_KEY");
-const GEMINI_MODEL = "gemini-flash-latest"; // Default model
+const GEMINI_MODEL = "gemini-2.5-flash"; // Default model
 const GEMINI_PRO_MODEL = "gemini-2.5-pro"; // Pro model
 const MAX_HISTORY_LENGTH = 20; // Max messages PER CONVERSATION (per DM or per Space property)
 
