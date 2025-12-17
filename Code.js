@@ -608,6 +608,8 @@ function callGeminiApiWithHistory(history, model) {
                 threshold: "BLOCK_ONLY_HIGH",
             },
         ],
+        // Google Maps tool is not supported with CodeExecution
+        // Google Maps tool is not supported by gemini-3-flash-preview 
         tools: [
             {
                 urlContext: {},
@@ -615,13 +617,12 @@ function callGeminiApiWithHistory(history, model) {
             {
                 googleSearch: {},
             },
-            // Google Maps tool is not supported with CodeExecution
             // {
             //     codeExecution: {},
             // },
-            {
-                googleMaps: {},
-            },
+            // {
+            //     googleMaps: {},
+            // },
         ],
     };
 
