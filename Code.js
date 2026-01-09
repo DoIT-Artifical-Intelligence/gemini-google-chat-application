@@ -13,6 +13,12 @@ const NEW_CHAT_COMMAND_ID = 4; // /newchat
 const PRO_COMMAND_ID = 5; // /pro
 const SOURCE_COMMAND_ID = 6; // /source
 
+function hardResetAuth() {
+  ScriptApp.invalidateAuth();
+  // The script will no longer have access after this line runs.
+  // The next execution will require re-authorization.
+}
+
 // --- API Key Masking Function ---
 /**
  * Masks API keys found in a string.
@@ -311,7 +317,6 @@ function onMessage(event) {
 
             // Decide whether to process based on DM or mention
             if (spaceType === "DM" || isMentioned) {
-                // --- FIX STARTS HERE ---
                 // Extract text after mention if the bot was mentioned, regardless of space type.
                 // This handles cases where a user might @mention the bot even in a DM.
                 if (isMentioned) {
@@ -325,7 +330,7 @@ function onMessage(event) {
                         `Mention text extracted: "${userPrompt}" (Original: "${event.message.text}")`
                     );
                 }
-                // --- FIX ENDS HERE ---
+
 
                 // Check for "Use pro." text trigger (case-insensitive) on the cleaned prompt
                 if (userPrompt.toLowerCase().startsWith("use pro.")) {
@@ -376,7 +381,7 @@ function onMessage(event) {
         const displayName = event.user?.displayName;
 
         if (displayName) {
-            // ** UPDATED LINE **
+
             finalUserPrompt = `Message from ${displayName}. Please ignore this unless prompting about past conversations. ${userPrompt}`;
             console.log(
                 `Adding user display name prefix. Original prompt: "${userPrompt}", Final prompt: "${finalUserPrompt}"`
@@ -542,27 +547,30 @@ function createCardResponse(messageText, viewer = null) {
 
 /**
  * Calls the Gemini API with the provided conversation history and model.
- * Handles request preparation, API call, and response/error processing.
+ * Uses OAuth2 (ScriptApp.getOAuthToken) instead of API Key.
  *
  * @param {Array<{role: string, parts: Array<{text: string}>}>} history The conversation history array.
- * @param {string} model The Gemini model to use (e.g., 'gemini-1.5-flash').
+ * @param {string} model The Gemini model to use.
  * @return {string} The text response from Gemini, or an error message string.
  */
 function callGeminiApiWithHistory(history, model) {
-    if (!GEMINI_API_KEY) {
-        console.error("GEMINI_API_KEY script property not set.");
-        return "ERROR: GEMINI_API_KEY script property not set.";
-    }
     if (!history || history.length === 0) {
         console.error("Attempted to call Gemini with empty history.");
         return "Sorry, something went wrong (internal history error).";
     }
 
-    const geminiApiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-    console.log(`Calling Gemini API endpoint for model: ${model}`);
+    // We now rely on the Bearer token in the header.
+    const geminiApiEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-    const { filteredHistory, needsLeadingUserRole } =
-        filterAndPrepareHistory(history);
+    console.log(`Calling Gemini API endpoint for model: ${model}`);
+    const token = ScriptApp.getOAuthToken();
+    if (token) {
+        console.log(`OAuth Token present. First 5 chars: ${token.substring(0, 5)}...`);
+    } else {
+        console.error("OAuth Token IS MISSING from ScriptApp.getOAuthToken()!");
+    }
+
+    const { filteredHistory, needsLeadingUserRole } = filterAndPrepareHistory(history);
 
     if (filteredHistory.length === 0 && !needsLeadingUserRole) {
         console.error("History is empty after filtering adjacent roles.");
@@ -570,65 +578,48 @@ function callGeminiApiWithHistory(history, model) {
     }
 
     if (needsLeadingUserRole) {
-        console.warn(
-            "History requires leading 'user' role. Prepending a placeholder."
-        );
+        console.warn("History requires leading 'user' role. Prepending a placeholder.");
         filteredHistory.unshift({
             role: "user",
             parts: [{ text: "(Context starts)" }],
         });
     }
 
-    // ** UPDATED SECTION: System instructions and conditional logic removed. **
     const payload = {
         contents: filteredHistory,
         generationConfig: {
-            temperature: 1,
-            topP: 0.95,
-            topK: 64,
-            maxOutputTokens: 65536,
-            thinkingConfig: { thinkingBudget: -1 },
-            candidateCount: 1,
+            thinkingConfig: { thinkingLevel: "LOW" },
         },
         safetySettings: [
             {
                 category: "HARM_CATEGORY_HARASSMENT",
-                threshold: "BLOCK_ONLY_HIGH",
+                threshold: "BLOCK_LOW_AND_ABOVE"
             },
             {
                 category: "HARM_CATEGORY_HATE_SPEECH",
-                threshold: "BLOCK_ONLY_HIGH",
+                threshold: "BLOCK_LOW_AND_ABOVE"
             },
             {
                 category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                threshold: "BLOCK_ONLY_HIGH",
+                threshold: "BLOCK_LOW_AND_ABOVE"
             },
             {
                 category: "HARM_CATEGORY_DANGEROUS_CONTENT",
-                threshold: "BLOCK_ONLY_HIGH",
+                threshold: "BLOCK_LOW_AND_ABOVE"
             },
         ],
-        // Google Maps tool is not supported with CodeExecution
-        // Google Maps tool is not supported by gemini-3-flash-preview 
         tools: [
-            {
-                urlContext: {},
-            },
-            {
-                googleSearch: {},
-            },
-            // {
-            //     codeExecution: {},
-            // },
-            // {
-            //     googleMaps: {},
-            // },
+            { urlContext: {} },
+            { googleSearch: {} },
         ],
     };
 
     const options = {
         method: "post",
         contentType: "application/json",
+        headers: {
+            Authorization: `Bearer ${ScriptApp.getOAuthToken()}`
+        },
         payload: JSON.stringify(payload),
         muteHttpExceptions: true,
     };
@@ -646,25 +637,15 @@ function callGeminiApiWithHistory(history, model) {
         const responseBody = response.getContentText();
 
         if (responseCode === 200) {
-            // ... (The rest of your response handling logic remains exactly the same)
             const data = JSON.parse(responseBody);
 
             if (data.promptFeedback && data.promptFeedback.blockReason) {
-                console.error(
-                    "Gemini API blocked the prompt. Reason:",
-                    data.promptFeedback.blockReason,
-                    "Ratings:",
-                    JSON.stringify(data.promptFeedback.safetyRatings)
-                );
+                console.error("Gemini API blocked the prompt.", data.promptFeedback.blockReason);
                 return `Sorry, your request was blocked by safety filters (Reason: ${data.promptFeedback.blockReason}).`;
             }
 
             if (!data.candidates || data.candidates.length === 0) {
-                console.error(
-                    "Gemini API response missing 'candidates' array or empty.",
-                    "Full Response Snippet:",
-                    responseBody.substring(0, 500)
-                );
+                // Handle empty candidates
                 if (data.promptFeedback && data.promptFeedback.blockReason) {
                     return `Sorry, your request was blocked (Reason: ${data.promptFeedback.blockReason}).`;
                 }
@@ -673,81 +654,39 @@ function callGeminiApiWithHistory(history, model) {
 
             const candidate = data.candidates[0];
 
-            if (
-                candidate &&
-                candidate.finishReason &&
-                candidate.finishReason !== "STOP" &&
-                candidate.finishReason !== "MAX_TOKENS"
-            ) {
-                console.error(
-                    `Gemini API finished with non-standard reason: ${candidate.finishReason}. Ratings:`,
-                    JSON.stringify(candidate.safetyRatings)
-                );
-                let reasonMessage = `Reason: ${candidate.finishReason}.`;
-                if (candidate.finishReason === "SAFETY")
-                    reasonMessage = "due to safety filters.";
-                else if (candidate.finishReason === "RECITATION")
-                    reasonMessage = "due to potential recitation issues.";
-                return `Sorry, the response generation was stopped ${reasonMessage}`;
+            // Check finish reason
+            if (candidate && candidate.finishReason && candidate.finishReason !== "STOP" && candidate.finishReason !== "MAX_TOKENS") {
+                return `Sorry, the response generation was stopped (Reason: ${candidate.finishReason}).`;
             }
 
+            // Extract text logic
             let responseText = null;
             const parts = candidate?.content?.parts;
 
             if (Array.isArray(parts)) {
+                // Find first part that isn't a "thought" (CoT)
                 const responsePart = parts.find((part) => !part.thought);
-
                 if (responsePart && responsePart.text) {
                     responseText = responsePart.text.trim();
-                    console.log("Extracted response text from non-thought part.");
                 } else {
-                    const hasOnlyThoughts =
-                        parts.length > 0 && parts.every((part) => part.thought);
-                    if (hasOnlyThoughts) {
-                        console.warn(
-                            "Gemini response contained ONLY 'thought' parts. No user-facing text found."
-                        );
-                        responseText = null;
-                    } else if (parts.length > 0 && !parts.some((part) => part.text)) {
-                        console.warn(
-                            "Gemini response parts found, but none contained text."
-                        );
-                        responseText = null;
-                    } else if (parts.length === 0) {
-                        console.warn(
-                            "Gemini response candidate had an empty 'parts' array."
-                        );
-                        responseText = null;
+                    // Fallback logic for thought-only responses
+                    if (parts.length > 0 && parts.every((part) => part.thought)) {
+                        console.warn("Only thought parts found.");
                     }
                 }
-            } else {
-                console.warn("Candidate content.parts is missing or not an array.");
             }
 
             if (responseText !== null) {
                 return responseText;
             } else {
-                if (candidate?.content?.parts?.[0]?.functionCall) {
-                    console.warn(
-                        "Gemini response was a function call, but no text part generated:",
-                        JSON.stringify(candidate.content.parts[0].functionCall)
-                    );
-                    return "Sorry, the AI tool call did not produce a text response.";
-                }
-                console.error(
-                    "Gemini response structure missing expected non-thought text content.",
-                    "Candidate:",
-                    JSON.stringify(candidate),
-                    "Full Response Snippet:",
-                    responseBody.substring(0, 500)
-                );
-                return `Sorry, the AI returned empty or invalid response content (Finish Reason: ${candidate?.finishReason || "Unknown"
-                    }). No suitable text part found.`;
+                return "Sorry, the AI returned empty or invalid response content.";
             }
+
         } else {
-            console.error(
-                `Gemini API Error Response (${responseCode}): ${responseBody}`
-            );
+            console.error(`Gemini API Error Response (${responseCode}): ${responseBody}`);
+            if (responseCode === 403) {
+                console.error("Status 403 detected. This usually means insufficient scopes in appsscript.json. Ensure 'https://www.googleapis.com/auth/generative-language' is present.");
+            }
             let errorMessage = `Sorry, there was an error contacting the AI (Status: ${responseCode}).`;
             try {
                 const errorData = JSON.parse(responseBody);
@@ -760,10 +699,7 @@ function callGeminiApiWithHistory(history, model) {
             return errorMessage;
         }
     } catch (e) {
-        console.error(
-            `Error during UrlFetchApp or response processing: ${e}`,
-            e.stack
-        );
+        console.error(`Error during UrlFetchApp or response processing: ${e}`, e.stack);
         return `Sorry, an unexpected error occurred while trying to reach the AI (${e.message}).`;
     }
 }
@@ -1139,4 +1075,151 @@ function onRemoveFromSpace(event) {
             `Error clearing history property ${propertyKey} for space ${spaceId} on removal: ${e}`
         );
     }
+}
+
+/**
+ * Test function to dry-run a conversation turn from the Apps Script editor.
+ * Use this to verify your API credentials and the basic chat flow.
+ */
+
+function testGeminiChat() {
+    const TEST_SPACE_NAME =
+        PropertiesService.getScriptProperties().getProperty("TEST_SPACE_NAME") || "spaces/AAAA_TEST";
+    const testSpaceName = TEST_SPACE_NAME.startsWith("spaces/") ? TEST_SPACE_NAME : `spaces/${TEST_SPACE_NAME}`;
+    const testPrompt = "Hello, can you help me write a poem?";
+
+    console.log("--- Starting Test Gemini Chat (End-to-End) ---");
+    try {
+        // Clear history before test to ensure clean slate
+        const scriptProperties = PropertiesService.getScriptProperties();
+        const historyPropertyKey = getHistoryPropertyKey(testSpaceName);
+        if (historyPropertyKey && scriptProperties.getProperty(historyPropertyKey)) {
+            scriptProperties.deleteProperty(historyPropertyKey);
+            console.log(`History cleared for ${testSpaceName} before test.`);
+        }
+
+        const response = handleConversationTurn(testSpaceName, testPrompt);
+        console.log("Test execution successful!");
+        console.log("Response JSON:", JSON.stringify(response, null, 2));
+
+        // Basic verification of the response structure
+        if (response && response.cardsV2 && response.cardsV2.length > 0) {
+            const text = response.cardsV2[0].card.sections[0].widgets[0].textParagraph.text;
+            console.log("\n--- AI Response Text ---");
+            console.log(text);
+            console.log("------------------------");
+        } else {
+            console.error("Response structure was unexpected or empty.");
+        }
+    } catch (e) {
+        console.error("Test failed with error:", e);
+    }
+    console.log("--- Test Gemini Chat Finished ---");
+}
+
+/**
+ * Simple connection check using the shared helper.
+ * Verifies that callGeminiApiWithHistory works with the 'generateContent' endpoint.
+ */
+function testGeminiSimpleMessage() {
+    console.log("--- Starting Test: Simple Message ---");
+    const history = [
+        { role: "user", parts: [{ text: "Hello, describe the color blue in 5 words." }] }
+    ];
+    const response = callGeminiApiWithHistory(history, GEMINI_MODEL);
+    console.log("Response:", response);
+
+    if (response && !response.startsWith("Sorry,")) {
+        console.log("SUCCESS: Received valid response.");
+    } else {
+        console.error("FAILURE: API call returned error or empty response.");
+    }
+    console.log("--- Finished Test: Simple Message ---");
+}
+
+/**
+ * Verifies the PRO model configuration.
+ */
+function testGeminiProModel() {
+    console.log("--- Starting Test: Pro Model ---");
+    const history = [
+        { role: "user", parts: [{ text: "Explain quantum entanglement briefly for a 5 year old." }] }
+    ];
+    // Intentionally using GEMINI_PRO_MODEL
+    const response = callGeminiApiWithHistory(history, GEMINI_PRO_MODEL);
+    console.log("Pro Model Response:", response);
+
+    if (response && !response.startsWith("Sorry,")) {
+        console.log("SUCCESS: Received valid response from Pro model.");
+    } else {
+        console.error("FAILURE: Pro API call returned error.");
+    }
+    console.log("--- Finished Test: Pro Model ---");
+}
+
+/**
+ * Verifies multi-turn history handling.
+ */
+function testGeminiWithHistory() {
+    console.log("--- Starting Test: Conversation History ---");
+    const history = [
+        { role: "user", parts: [{ text: "My favorite color is green." }] },
+        { role: "model", parts: [{ text: "That's a nice color, the color of nature." }] },
+        { role: "user", parts: [{ text: "What is my favorite color?" }] }
+    ];
+
+    const response = callGeminiApiWithHistory(history, GEMINI_MODEL);
+    console.log("History Response:", response);
+
+    if (response && response.toLowerCase().includes("green")) {
+        console.log("SUCCESS: Model correctly recalled the favorite color.");
+    } else if (response && !response.startsWith("Sorry,")) {
+        console.warn("WARNING: Model responded but might not have recalled the fact. Check output manually.");
+    } else {
+        console.error("FAILURE: API call returned error.");
+    }
+    console.log("--- Finished Test: Conversation History ---");
+}
+
+
+/**
+ * Test function for onMessage.
+ * Simulates an event object and calls onMessage.
+ */
+function testOnMessage() {
+    console.log("--- Starting Test: onMessage ---");
+    const testEvent = {
+        type: "MESSAGE",
+        eventTime: { seconds: 1600000000, nanos: 0 },
+        space: {
+            name: "spaces/SEARCH_TEST_SPACE",
+            displayName: "Test Space",
+            type: "DM",
+        },
+        message: {
+            name: "spaces/SEARCH_TEST_SPACE/messages/msg-1",
+            sender: {
+                name: "users/12345",
+                displayName: "Test User",
+                type: "HUMAN",
+                email: "testuser@example.com",
+            },
+            createTime: { seconds: 1600000000, nanos: 0 },
+            text: "Hello, this is a test message for onMessage.",
+            thread: { name: "spaces/SEARCH_TEST_SPACE/threads/thread-1" },
+        },
+        user: {
+            name: "users/12345",
+            displayName: "Test User",
+            type: "HUMAN",
+        },
+    };
+
+    try {
+        const response = onMessage(testEvent);
+        console.log("onMessage Test Response:", JSON.stringify(response, null, 2));
+    } catch (e) {
+        console.error("onMessage Test Failed:", e);
+    }
+    console.log("--- Finished Test: onMessage ---");
 }
